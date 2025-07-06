@@ -101,6 +101,7 @@ function handle.LOAD2()
     M.faction_data = assign(aux.faction[key], {
         history = {},
         post = {},
+        auctions = {},
     })
 end
 
