@@ -19,11 +19,28 @@ local aux = require 'aux'
 local persistence = require 'aux.util.persistence'
 
 local history_schema = {'tuple', '#', {next_push='number'}, {daily_min_buyout='number'}, {data_points={'list', ';', {'tuple', '@', {value='number'}, {time='number'}}}}}
+local auction_schema = {'tuple', '@',
+    {time='number'},
+    {item_id='number'},
+    {suffix_id='number'},
+    {enchant_id='number'},
+    {unique_id='number'},
+    {count='number'},
+    {aux_quantity='number'},
+    {start_price='number'},
+    {bid_price='number'},
+    {buyout_price='number'},
+    {owner='string'},
+    {high_bidder='string'},
+    {duration='number'}
+}
 
 local value_cache = {}
+local auction_data
 
 function aux.handle.LOAD2()
-	data = aux.faction_data.history
+        data = aux.faction_data.history
+        auction_data = aux.faction_data.auctions
 end
 
 do
@@ -52,11 +69,31 @@ function read_record(item_key)
 end
 
 function write_record(item_key, record)
-	data[item_key] = persistence.write(history_schema, record)
-	if value_cache[item_key] then
-		T.release(value_cache[item_key])
-		value_cache[item_key] = nil
-	end
+        data[item_key] = persistence.write(history_schema, record)
+        if value_cache[item_key] then
+                T.release(value_cache[item_key])
+                value_cache[item_key] = nil
+        end
+end
+
+local function store_auction(auction_record)
+        if not auction_data then return end
+        local entry = T.temp-T.map(
+                'time', time(),
+                'item_id', auction_record.item_id,
+                'suffix_id', auction_record.suffix_id,
+                'enchant_id', auction_record.enchant_id,
+                'unique_id', auction_record.unique_id,
+                'count', auction_record.count,
+                'aux_quantity', auction_record.aux_quantity,
+                'start_price', auction_record.start_price,
+                'bid_price', auction_record.bid_price,
+                'buyout_price', auction_record.buyout_price,
+                'owner', auction_record.owner,
+                'high_bidder', auction_record.high_bidder,
+                'duration', auction_record.duration
+        )
+        tinsert(auction_data, persistence.write(auction_schema, entry))
 end
 
 --pfUI.api.strsplit
@@ -102,22 +139,23 @@ AUX_data_sharer:SetScript("OnEvent", function()
   end)
 
 function M.process_auction(auction_record, pages)
-	local item_record = read_record(auction_record.item_key)
-	local unit_buyout_price = ceil(auction_record.buyout_price / auction_record.aux_quantity)
-	local item_key = auction_record.item_key
-	if unit_buyout_price > 0 and unit_buyout_price < (item_record.daily_min_buyout or aux.huge) then
-		item_record.daily_min_buyout = unit_buyout_price
-		write_record(auction_record.item_key, item_record)
-		--AuxAddon:SendCommMessage("GUILD", item_key, unit_buyout_price) relies on acecomm
-		if aux.account_data.sharing == true then
-			if pages < 15 then --to avoid sharing data when people do searches without a keyword "full scans"
-				if GetChannelName("LFT") ~= 0 then
-					ChatThrottleLib:SendChatMessage("BULK", nil, "AuxData," .. item_key .."," .. unit_buyout_price , "CHANNEL", nil, GetChannelName("LFT")) --ChatThrottleLib fixed for turtle by Candor https://github.com/trumpetx/ChatLootBidder/blob/master/ChatThrottleLib.lua
-				  	--print("sent")
-				end
-		 	end
-		end
-	end
+        local item_record = read_record(auction_record.item_key)
+        local unit_buyout_price = ceil(auction_record.buyout_price / auction_record.aux_quantity)
+        local item_key = auction_record.item_key
+        if unit_buyout_price > 0 and unit_buyout_price < (item_record.daily_min_buyout or aux.huge) then
+                item_record.daily_min_buyout = unit_buyout_price
+                write_record(auction_record.item_key, item_record)
+                --AuxAddon:SendCommMessage("GUILD", item_key, unit_buyout_price) relies on acecomm
+                if aux.account_data.sharing == true then
+                        if pages < 15 then --to avoid sharing data when people do searches without a keyword "full scans"
+                                if GetChannelName("LFT") ~= 0 then
+                                        ChatThrottleLib:SendChatMessage("BULK", nil, "AuxData," .. item_key .."," .. unit_buyout_price , "CHANNEL", nil, GetChannelName("LFT")) --ChatThrottleLib fixed for turtle by Candor https://github.com/trumpetx/ChatLootBidder/blob/master/ChatThrottleLib.lua
+                                        --print("sent")
+                                end
+                        end
+                end
+        end
+        store_auction(auction_record)
 end
 
 --[[ function AuxAddon:OnCommReceive(prefix, sender, distribution, item_key, unit_buyout_price) --copied code from process_auction. <- code for when using acecomm
@@ -131,7 +169,15 @@ end
 end ]]--
 
 function M.data_points(item_key)
-	return read_record(item_key).data_points
+        return read_record(item_key).data_points
+end
+
+function M.auctions()
+        local records = T.acquire()
+        for _, v in (auction_data or T.empty) do
+                tinsert(records, persistence.read(auction_schema, v))
+        end
+        return records
 end
 
 function M.value(item_key)
