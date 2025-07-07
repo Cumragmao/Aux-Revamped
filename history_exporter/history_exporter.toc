@@ -1,0 +1,6 @@
+## Interface: 11200
+## Title: AuxHistoryExporter
+## Dependencies: aux
+## SavedVariables: MyAddon_auctionHistory
+
+history_exporter.lua
